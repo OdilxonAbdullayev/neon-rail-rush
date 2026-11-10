@@ -36,6 +36,14 @@ jobs:
           test -s scenes/main.tscn
           echo "Project files found"
 
+      - name: Install Python 3 for project checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3
+          python3 --version
+
       - name: Run structural checks
         shell: bash
         run: python3 scripts_ci/test_project.py
