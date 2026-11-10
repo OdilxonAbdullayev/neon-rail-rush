@@ -1,0 +1,78 @@
+name: NEON RAIL RUSH - Android APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Build Android debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    container:
+      image: barichello/godot-ci:4.4.1
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Android SDK 35 (required by Godot 4.4)
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platform-tools" "build-tools;35.0.1" "platforms;android-35"
+
+      - name: Verify required files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s project.godot
+          test -s export_presets.cfg
+          test -s scripts/runner.gd
+          test -s scenes/main.tscn
+          echo "Project files found"
+
+      - name: Run structural checks
+        shell: bash
+        run: python3 scripts_ci/test_project.py
+
+      - name: Import Godot resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          godot --headless --path . --editor --import 2>&1 | tee /tmp/import.log
+          if grep -Ei '(SCRIPT ERROR|PARSE ERROR|Failed to load script|Parse Error)' /tmp/import.log; then
+            echo "GDScript import error; see log above"
+            exit 1
+          fi
+
+      - name: Smoke-test the game scene
+        shell: bash
+        run: |
+          set -euo pipefail
+          godot --headless --path . --quit-after 8 2>&1 | tee /tmp/game.log
+          if grep -Ei '(SCRIPT ERROR|PARSE ERROR|Invalid call|Invalid access|Failed to load script)' /tmp/game.log; then
+            echo "Runtime error; see log above"
+            exit 1
+          fi
+
+      - name: Build signed debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          godot --headless --path . --export-debug "Android" build/neon-rail-rush-debug.apk
+          test -s build/neon-rail-rush-debug.apk
+          ls -lh build/neon-rail-rush-debug.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Neon-Rail-Rush-Android-APK
+          path: build/neon-rail-rush-debug.apk
+          if-no-files-found: error
+          retention-days: 30
