@@ -11,20 +11,64 @@ permissions:
 jobs:
   android:
     name: Build Android debug APK
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     container:
       image: barichello/godot-ci:4.4.1
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Install Android SDK 35 (required by Godot 4.4)
+      # GitHub Actions changes HOME to /github/home. The Docker image installed
+      # Godot export templates, editor settings and keystore under /root.
+      - name: Prepare Godot Android export environment
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platform-tools" "build-tools;35.0.1" "platforms;android-35"
+          GODOT_VERSION_DIR="4.4.1.stable"
+          TEMPLATE_SOURCE="/root/.local/share/godot/export_templates/$GODOT_VERSION_DIR"
+          TEMPLATE_DEST="$HOME/.local/share/godot/export_templates/$GODOT_VERSION_DIR"
+          test -s "$TEMPLATE_SOURCE/android_debug.apk" || { echo 'Missing Android debug export template in CI image'; exit 1; }
+          test -s "$TEMPLATE_SOURCE/android_release.apk" || { echo 'Missing Android release export template in CI image'; exit 1; }
+          test -s /root/debug.keystore || { echo 'Debug keystore missing in CI image'; exit 1; }
+          mkdir -p "$TEMPLATE_DEST" "$HOME/.config/godot" "$HOME/.android"
+          cp -a "$TEMPLATE_SOURCE/." "$TEMPLATE_DEST/"
+          cp /root/debug.keystore "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          test -d /usr/lib/jvm/java-17-openjdk-amd64
+          test -d /usr/lib/android-sdk
+          cat > "$HOME/.config/godot/editor_settings-4.4.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+          [resource]
+          export/android/java_sdk_path = "/usr/lib/jvm/java-17-openjdk-amd64"
+          export/android/android_sdk_path = "/usr/lib/android-sdk"
+          export/android/debug_keystore = "$HOME/.android/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          export/android/force_system_user = false
+          export/android/shutdown_adb_on_exit = true
+          EOF
+          # Godot also accepts these options as environment overrides.
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$HOME/.android/debug.keystore" >> "$GITHUB_ENV"
+          echo 'GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey' >> "$GITHUB_ENV"
+          echo 'GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android' >> "$GITHUB_ENV"
+          echo 'Godot export templates:'
+          ls -lh "$TEMPLATE_DEST/android_debug.apk" "$TEMPLATE_DEST/android_release.apk"
+          echo "Java SDK: /usr/lib/jvm/java-17-openjdk-amd64"
+          echo "Android SDK: /usr/lib/android-sdk"
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_HOME=/usr/lib/android-sdk
+          yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses > /dev/null || true
+          sdkmanager --sdk_root="$ANDROID_HOME" \
+            "platform-tools" \
+            "build-tools;34.0.0" "platforms;android-34" \
+            "build-tools;35.0.0" "platforms;android-35"
+          test -x "$ANDROID_HOME/platform-tools/adb"
+          test -d "$ANDROID_HOME/build-tools/35.0.0"
 
       - name: Verify required files
         shell: bash
@@ -34,7 +78,7 @@ jobs:
           test -s export_presets.cfg
           test -s scripts/runner.gd
           test -s scenes/main.tscn
-          echo "Project files found"
+          echo 'Project files found'
 
       - name: Install Python 3 for project checks
         shell: bash
@@ -54,7 +98,7 @@ jobs:
           set -euo pipefail
           godot --headless --path . --editor --import 2>&1 | tee /tmp/import.log
           if grep -Ei '(SCRIPT ERROR|PARSE ERROR|Failed to load script|Parse Error)' /tmp/import.log; then
-            echo "GDScript import error; see log above"
+            echo 'GDScript import error; see log above'
             exit 1
           fi
 
@@ -64,7 +108,7 @@ jobs:
           set -euo pipefail
           godot --headless --path . --quit-after 8 2>&1 | tee /tmp/game.log
           if grep -Ei '(SCRIPT ERROR|PARSE ERROR|Invalid call|Invalid access|Failed to load script)' /tmp/game.log; then
-            echo "Runtime error; see log above"
+            echo 'Runtime error; see log above'
             exit 1
           fi
 
@@ -73,7 +117,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build
-          godot --headless --path . --export-debug "Android" build/neon-rail-rush-debug.apk
+          godot --headless --path . --export-debug Android build/neon-rail-rush-debug.apk
           test -s build/neon-rail-rush-debug.apk
           ls -lh build/neon-rail-rush-debug.apk
 
